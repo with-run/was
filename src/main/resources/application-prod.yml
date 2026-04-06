@@ -1,0 +1,15 @@
+server:
+  servlet:
+    session:
+      cookie:
+        name: WITHRUNSESSIONPROD
+
+app:
+  auth:
+    frontend-base-url: https://j14d202.p.ssafy.io
+
+auth:
+  jwt:
+    refresh-cookie-name: refresh_token_prod
+    refresh-cookie-secure: true
+    refresh-cookie-same-site: None

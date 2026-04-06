@@ -1,0 +1,110 @@
+# ▼ spring 항목을 하나로 합쳤습니다!
+spring:
+  config:
+    # AWS Parameter Store에서 공통 설정을 읽어옵니다.
+    import: "aws-parameterstore:/config/withrun/"
+
+  datasource:
+    # DB 접속 정보
+    url: ${jdbc.url}
+    username: ${jdbc.username}
+    password: ${jdbc.password}
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        format_sql: true
+    show-sql: true
+
+  # ▼ 아래 있던 security 내용을 이쪽으로 끌어올렸습니다.
+  security:
+    oauth2:
+      client:
+        registration:
+          # Google OAuth 클라이언트 설정
+          google:
+            client-id: ${google.oauth.client-id}
+            client-secret: ${google.oauth.client-secret}
+            scope:
+              - openid
+              - profile
+              - email
+          kakao:
+            client-id: ${kakao.oauth.client-id}
+            client-secret: ${kakao.oauth.client-secret}
+            client-name: Kakao
+            authorization-grant-type: authorization_code
+            redirect-uri: "{baseUrl}/login/oauth2/code/kakao"
+            client-authentication-method: client_secret_post
+            scope:
+              - profile_nickname
+              - profile_image
+        provider:
+          kakao:
+            authorization-uri: https://kauth.kakao.com/oauth/authorize
+            token-uri: https://kauth.kakao.com/oauth/token
+            user-info-uri: https://kapi.kakao.com/v2/user/me
+            user-name-attribute: id
+
+cloud:
+  aws:
+    region:
+      static: ap-northeast-2
+
+logging:
+  level:
+    org.hibernate.SQL: debug
+    org.hibernate.orm.jdbc.bind: trace
+
+valhalla:
+  base-url: ${VALHALLA_BASE_URL:http://localhost:8002}
+
+server:
+  # 프록시(Nginx) 뒤에서 들어온 https/host/port 정보를 기준으로 OAuth redirect URI를 계산합니다.
+  forward-headers-strategy: framework
+  servlet:
+    session:
+      cookie:
+        # OAuth state 저장 등에 사용하는 세션 쿠키 설정
+        name: WITHRUNSESSION
+        http-only: true
+        same-site: lax
+
+app:
+  s3:
+    # 업로드 파일을 저장할 S3 버킷
+    bucket: ${s3.bucket:}
+  cdn:
+    base-url: ${cdn.url}
+  cloudfront:
+    key-pair-id: ${cloudfront.key-pair-id:}
+    private-key: ${cloudfront.private-key:}
+    signed-url-expiration-seconds: ${cloudfront.signed-url-expiration-seconds}
+
+  auth:
+    # 로그인 성공 후 웹 프론트로 복귀할 기본 주소
+    frontend-base-url: http://localhost:5173
+    # 모바일 WebView/딥링크 복귀에 사용할 기본 주소
+    mobile-deep-link-base: ${app.auth.mobile-deep-link-base:withrun://auth/callback}
+  navigation:
+    polyline:
+      language: ko-KR
+      generator: polyline-navigation-bundle
+      noise-floor-meters: 6.0
+      anchor-window-meters: 15.0
+      merge-distance-meters: 24.0
+      straight-threshold-deg: 30
+      mild-threshold-deg: 60
+      normal-threshold-deg: 125
+      u-turn-threshold-deg: 170
+  recommendation:
+    weight:
+      location: 0.45
+      cbf: 0.45
+      quality: 0.10
+      cf-alpha: 0.20
+    feedback:
+      max-beta: 0.50
+      review-confidence-count: 10

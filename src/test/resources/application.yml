@@ -1,0 +1,61 @@
+spring:
+  config:
+    import: ""
+  cloud:
+    aws:
+      parameterstore:
+        enabled: false
+  datasource:
+    url: jdbc:h2:mem:testdb;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE;INIT=CREATE DOMAIN IF NOT EXISTS JSONB AS JSON
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: true
+
+  security:
+    oauth2:
+      client:
+        registration:
+          # 테스트 컨텍스트에서도 SecurityConfig가 OAuth2 설정을 읽기 때문에
+          # 실제 통신은 하지 않더라도 더미 registration/provider 값이 필요합니다.
+          google:
+            client-id: dummy-client-id
+            client-secret: dummy-client-secret
+            scope:
+              - openid
+              - profile
+              - email
+          kakao:
+            client-id: dummy-kakao-client-id
+            client-secret: dummy-kakao-client-secret
+            client-name: Kakao
+            authorization-grant-type: authorization_code
+            redirect-uri: "{baseUrl}/login/oauth2/code/kakao"
+            client-authentication-method: client_secret_post
+            scope:
+              - profile_nickname
+              - profile_image
+        provider:
+          kakao:
+            authorization-uri: https://kauth.kakao.com/oauth/authorize
+            token-uri: https://kauth.kakao.com/oauth/token
+            user-info-uri: https://kapi.kakao.com/v2/user/me
+            user-name-attribute: id
+
+app:
+  cdn:
+    base-url: https://cdn.withrun.app
+  auth:
+    frontend-base-url: http://localhost:5173
+    mobile-deep-link-base: withrun://auth/callback
+    allowed-origins:
+      - http://localhost:5173
+
+auth:
+  jwt:
+    # JwtProvider 테스트와 보안 필터 테스트에서 사용할 고정 secret 입니다.
+    access-secret: 0123456789abcdef0123456789abcdef

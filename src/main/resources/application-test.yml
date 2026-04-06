@@ -1,0 +1,26 @@
+server:
+  servlet:
+    session:
+      cookie:
+        name: WITHRUNSESSIONTEST
+
+app:
+  auth:
+    frontend-base-url: https://j14d202.p.ssafy.io:8443
+  navigation:
+    polyline:
+      language: ko-KR
+      generator: polyline-navigation-bundle
+      noise-floor-meters: 6.0
+      anchor-window-meters: 15.0
+      merge-distance-meters: 24.0
+      straight-threshold-deg: 30
+      mild-threshold-deg: 60
+      normal-threshold-deg: 125
+      u-turn-threshold-deg: 170
+
+auth:
+  jwt:
+    refresh-cookie-name: refresh_token_test
+    refresh-cookie-secure: true
+    refresh-cookie-same-site: None
