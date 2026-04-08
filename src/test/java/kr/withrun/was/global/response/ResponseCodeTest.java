@@ -39,6 +39,12 @@ class ResponseCodeTest {
         assertResponseCode(ResponseCode.COURSE_NOT_FOUND, "E304", HttpStatus.NOT_FOUND, "코스를 찾을 수 없습니다.");
     }
 
+    @DisplayName("코스 중복 코드를 Conflict 실패로 노출한다")
+    @Test
+    void exposesCourseAlreadyExistsAsConflictFailure() {
+        assertResponseCode(ResponseCode.COURSE_ALREADY_EXISTS, "E307", HttpStatus.CONFLICT, "이미 등록된 코스입니다.");
+    }
+
     @DisplayName("고스트 타깃 없음 코드를 Not Found 실패로 노출한다")
     @Test
     void exposesGhostTargetNotFoundAsNotFoundFailure() {

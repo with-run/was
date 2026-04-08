@@ -8,6 +8,7 @@ import com.querydsl.core.types.dsl.NumberExpression;
 import com.querydsl.core.types.dsl.NumberPath;
 import com.querydsl.jpa.JPAExpressions;
 import com.querydsl.jpa.impl.JPAQueryFactory;
+import jakarta.persistence.EntityManager;
 import kr.withrun.was.domain.course.dto.PreferredDistanceRange;
 import kr.withrun.was.domain.course.entity.Course;
 import kr.withrun.was.domain.course.entity.QCourse;
@@ -34,8 +35,74 @@ import java.util.Optional;
 public class CourseCustomRepositoryImpl implements CourseCustomRepository {
 
     private static final double EARTH_RADIUS_M = 6_371_000D;
+    private static final int SHAPE_METRIC_SRID = 5179;
+    private static final String EXISTS_PUBLIC_DUPLICATE_COURSE_BY_ROUTE_GEOMETRY_QUERY = """
+            SELECT c.course_id
+            FROM courses c
+            CROSS JOIN (
+                SELECT ST_Segmentize(
+                    ST_GeomFromText(:routeLineStringWkt, 4326)::geography,
+                    :shapeSegmentizeStepM
+                )::geometry AS input_geom
+            ) i
+            CROSS JOIN LATERAL (
+                SELECT
+                    ST_Transform(i.input_geom, :shapeMetricSrid) AS input_geom_m,
+                    ST_Transform(
+                        ST_Segmentize(c.route_geom::geography, :shapeSegmentizeStepM)::geometry,
+                        :shapeMetricSrid
+                    ) AS course_geom_m
+            ) g
+            WHERE c.deleted_at IS NULL
+              AND c.route_geom IS NOT NULL
+              AND c.status IN ('OFFICIAL', 'COMMUNITY')
+              AND c.end_latitude IS NOT NULL
+              AND c.end_longitude IS NOT NULL
+              AND c.distance_m BETWEEN :minDistanceM AND :maxDistanceM
+              AND (
+                    (
+                        ST_DWithin(
+                            ST_SetSRID(ST_MakePoint(c.start_longitude, c.start_latitude), 4326)::geography,
+                            ST_SetSRID(ST_MakePoint(:startLongitude, :startLatitude), 4326)::geography,
+                            :endpointThresholdM
+                        )
+                        AND ST_DWithin(
+                            ST_SetSRID(ST_MakePoint(c.end_longitude, c.end_latitude), 4326)::geography,
+                            ST_SetSRID(ST_MakePoint(:endLongitude, :endLatitude), 4326)::geography,
+                            :endpointThresholdM
+                        )
+                    )
+                    OR
+                    (
+                        ST_DWithin(
+                            ST_SetSRID(ST_MakePoint(c.start_longitude, c.start_latitude), 4326)::geography,
+                            ST_SetSRID(ST_MakePoint(:endLongitude, :endLatitude), 4326)::geography,
+                            :endpointThresholdM
+                        )
+                        AND ST_DWithin(
+                            ST_SetSRID(ST_MakePoint(c.end_longitude, c.end_latitude), 4326)::geography,
+                            ST_SetSRID(ST_MakePoint(:startLongitude, :startLatitude), 4326)::geography,
+                            :endpointThresholdM
+                        )
+                    )
+              )
+              AND ST_Length(g.input_geom_m) > 0
+              AND ST_Length(g.course_geom_m) > 0
+              AND LEAST(
+                    ST_Length(ST_Intersection(
+                        g.course_geom_m,
+                        ST_Buffer(g.input_geom_m, :shapeToleranceM)
+                    )) / ST_Length(g.course_geom_m),
+                    ST_Length(ST_Intersection(
+                        g.input_geom_m,
+                        ST_Buffer(g.course_geom_m, :shapeToleranceM)
+                    )) / ST_Length(g.input_geom_m)
+              ) >= :shapeMinOverlapRatio
+            LIMIT 1
+            """;
 
     private final JPAQueryFactory queryFactory;
+    private final EntityManager entityManager;
 
     @Override
     public Optional<Course> findNotDeletedCourse(Long courseId) {
@@ -262,6 +329,90 @@ public class CourseCustomRepositoryImpl implements CourseCustomRepository {
                 .fetchOne();
 
         return count == null ? 0L : count;
+    }
+
+    @Override
+    public boolean existsPublicDuplicateCourse(
+            double startLatitude,
+            double startLongitude,
+            double endLatitude,
+            double endLongitude,
+            int distanceM,
+            int endpointThresholdM,
+            double distanceDiffRatio
+    ) {
+        QCourse course = QCourse.course;
+        int normalizedDistanceM = Math.max(0, distanceM);
+        int normalizedEndpointThresholdM = Math.max(0, endpointThresholdM);
+        double normalizedDistanceDiffRatio = Math.max(0d, distanceDiffRatio);
+        int minDistanceM = Math.max(0, (int) Math.floor(normalizedDistanceM * (1d - normalizedDistanceDiffRatio)));
+        int maxDistanceM = (int) Math.ceil(normalizedDistanceM * (1d + normalizedDistanceDiffRatio));
+        NumberExpression<Integer> startDistanceMeters =
+                distanceMetersExpression(course.startLatitude, course.startLongitude, startLatitude, startLongitude);
+        NumberExpression<Integer> endDistanceMeters =
+                distanceMetersExpression(course.endLatitude, course.endLongitude, endLatitude, endLongitude);
+
+        Long foundCourseId = queryFactory
+                .select(course.id)
+                .from(course)
+                .where(
+                        course.deletedAt.isNull(),
+                        course.coordinates.isNotNull(),
+                        course.status.in(CourseStatus.OFFICIAL, CourseStatus.COMMUNITY),
+                        course.endLatitude.isNotNull(),
+                        course.endLongitude.isNotNull(),
+                        course.distanceM.between(minDistanceM, maxDistanceM),
+                        startDistanceMeters.loe(normalizedEndpointThresholdM),
+                        endDistanceMeters.loe(normalizedEndpointThresholdM)
+                )
+                .fetchFirst();
+
+        return foundCourseId != null;
+    }
+
+    @Override
+    public boolean existsPublicDuplicateCourseByRouteGeometry(
+            double startLatitude,
+            double startLongitude,
+            double endLatitude,
+            double endLongitude,
+            int distanceM,
+            int endpointThresholdM,
+            double distanceDiffRatio,
+            String routeLineStringWkt,
+            double shapeToleranceM,
+            double shapeMinOverlapRatio,
+            double shapeSegmentizeStepM
+    ) {
+        if (routeLineStringWkt == null || routeLineStringWkt.isBlank()) {
+            return false;
+        }
+
+        int normalizedDistanceM = Math.max(0, distanceM);
+        int normalizedEndpointThresholdM = Math.max(0, endpointThresholdM);
+        double normalizedDistanceDiffRatio = Math.max(0d, distanceDiffRatio);
+        double normalizedShapeToleranceM = Math.max(1d, shapeToleranceM);
+        double normalizedShapeMinOverlapRatio = Math.min(1d, Math.max(0d, shapeMinOverlapRatio));
+        double normalizedShapeSegmentizeStepM = Math.max(1d, shapeSegmentizeStepM);
+        int minDistanceM = Math.max(0, (int) Math.floor(normalizedDistanceM * (1d - normalizedDistanceDiffRatio)));
+        int maxDistanceM = (int) Math.ceil(normalizedDistanceM * (1d + normalizedDistanceDiffRatio));
+
+        List<?> foundRows = entityManager.createNativeQuery(EXISTS_PUBLIC_DUPLICATE_COURSE_BY_ROUTE_GEOMETRY_QUERY)
+                .setParameter("routeLineStringWkt", routeLineStringWkt)
+                .setParameter("startLatitude", startLatitude)
+                .setParameter("startLongitude", startLongitude)
+                .setParameter("endLatitude", endLatitude)
+                .setParameter("endLongitude", endLongitude)
+                .setParameter("endpointThresholdM", normalizedEndpointThresholdM)
+                .setParameter("minDistanceM", minDistanceM)
+                .setParameter("maxDistanceM", maxDistanceM)
+                .setParameter("shapeToleranceM", normalizedShapeToleranceM)
+                .setParameter("shapeMinOverlapRatio", normalizedShapeMinOverlapRatio)
+                .setParameter("shapeSegmentizeStepM", normalizedShapeSegmentizeStepM)
+                .setParameter("shapeMetricSrid", SHAPE_METRIC_SRID)
+                .getResultList();
+
+        return !foundRows.isEmpty();
     }
 
     private BooleanBuilder nearbyCourseWhereClause(QCourse course, List<PreferredDistanceRange> preferredDistanceMs) {

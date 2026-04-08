@@ -108,3 +108,10 @@ app:
     feedback:
       max-beta: 0.50
       review-confidence-count: 10
+  course-duplicate:
+    endpoint-threshold-m: 150
+    distance-diff-ratio: 0.12
+    phase2-enabled: true
+    shape-tolerance-m: 45
+    shape-min-overlap-ratio: 0.93
+    shape-segmentize-step-m: 15

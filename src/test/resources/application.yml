@@ -49,6 +49,13 @@ spring:
 app:
   cdn:
     base-url: https://cdn.withrun.app
+  course-duplicate:
+    endpoint-threshold-m: 150
+    distance-diff-ratio: 0.12
+    phase2-enabled: false
+    shape-tolerance-m: 45
+    shape-min-overlap-ratio: 0.93
+    shape-segmentize-step-m: 15
   auth:
     frontend-base-url: http://localhost:5173
     mobile-deep-link-base: withrun://auth/callback

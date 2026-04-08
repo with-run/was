@@ -59,6 +59,7 @@ import kr.withrun.was.global.common.type.Difficulty;
 import kr.withrun.was.global.exception.CustomException;
 import kr.withrun.was.global.response.ResponseCode;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -88,6 +89,24 @@ public class RunningSessionService {
     private final CloudFrontSignedUrlService cloudFrontSignedUrlService;
     private final NavigationBundleGenerationService navigationBundleGenerationService;
     private final CourseAccessPolicy courseAccessPolicy;
+
+    @Value("${app.course-duplicate.endpoint-threshold-m:150}")
+    private int duplicateCourseEndpointThresholdM = 150;
+
+    @Value("${app.course-duplicate.distance-diff-ratio:0.12}")
+    private double duplicateCourseDistanceDiffRatio = 0.12d;
+
+    @Value("${app.course-duplicate.phase2-enabled:false}")
+    private boolean duplicateCoursePhase2Enabled = false;
+
+    @Value("${app.course-duplicate.shape-tolerance-m:${app.course-duplicate.shape-threshold-m:45}}")
+    private double duplicateCourseShapeToleranceM = 45d;
+
+    @Value("${app.course-duplicate.shape-min-overlap-ratio:0.93}")
+    private double duplicateCourseShapeMinOverlapRatio = 0.93d;
+
+    @Value("${app.course-duplicate.shape-segmentize-step-m:15}")
+    private double duplicateCourseShapeSegmentizeStepM = 15d;
 
     @Transactional
     public CreateRunningSessionResponse createRunningSession(Long currentUserId, CreateRunningSessionRequest request) {
@@ -189,7 +208,13 @@ public class RunningSessionService {
         CourseStatus courseStatus = parseCourseStatus(request.mode());
         Difficulty difficulty = parseDifficulty(request.difficulty());
         List<CourseType> courseTypes = parseCourseTypes(request.courseTypes());
-        Coordinates courseCoordinates = buildCourseCoordinates(runningSessionId);
+        Coordinates courseCoordinates = duplicateCoursePhase2Enabled
+                ? buildCourseCoordinates(runningSessionId)
+                : null;
+        validateNoPublicDuplicateCourse(runningSession, courseCoordinates);
+        if (courseCoordinates == null) {
+            courseCoordinates = buildCourseCoordinates(runningSessionId);
+        }
 
         Course course = courseRepository.save(Course.builder()
                 .title(request.title())
@@ -650,6 +675,93 @@ public class RunningSessionService {
                 .map(sample -> new GeoPoint(sample.getLatitude(), sample.getLongitude(), sample.getAltitudeM()))
                 .toList();
         return new Coordinates(points);
+    }
+
+    private void validateNoPublicDuplicateCourse(RunningSession runningSession, Coordinates courseCoordinates) {
+        if (runningSession.getStartLatitude() == null
+                || runningSession.getStartLongitude() == null
+                || runningSession.getEndLatitude() == null
+                || runningSession.getEndLongitude() == null
+                || runningSession.getDistanceM() == null) {
+            return;
+        }
+
+        if (duplicateCoursePhase2Enabled) {
+            String routeLineStringWkt = toRouteLineStringWkt(courseCoordinates);
+            if (routeLineStringWkt != null) {
+                boolean duplicateExistsByShape = courseRepository.existsPublicDuplicateCourseByRouteGeometry(
+                        runningSession.getStartLatitude(),
+                        runningSession.getStartLongitude(),
+                        runningSession.getEndLatitude(),
+                        runningSession.getEndLongitude(),
+                        runningSession.getDistanceM(),
+                        duplicateCourseEndpointThresholdM,
+                        duplicateCourseDistanceDiffRatio,
+                        routeLineStringWkt,
+                        duplicateCourseShapeToleranceM,
+                        duplicateCourseShapeMinOverlapRatio,
+                        duplicateCourseShapeSegmentizeStepM
+                );
+                if (duplicateExistsByShape) {
+                    throw new CustomException(ResponseCode.COURSE_ALREADY_EXISTS);
+                }
+                return;
+            }
+        }
+
+        boolean duplicateExists = courseRepository.existsPublicDuplicateCourse(
+                runningSession.getStartLatitude(),
+                runningSession.getStartLongitude(),
+                runningSession.getEndLatitude(),
+                runningSession.getEndLongitude(),
+                runningSession.getDistanceM(),
+                duplicateCourseEndpointThresholdM,
+                duplicateCourseDistanceDiffRatio
+        );
+
+        if (duplicateExists) {
+            throw new CustomException(ResponseCode.COURSE_ALREADY_EXISTS);
+        }
+    }
+
+    private String toRouteLineStringWkt(Coordinates coordinates) {
+        if (coordinates == null || coordinates.values().isEmpty()) {
+            return null;
+        }
+
+        StringBuilder lineStringBuilder = new StringBuilder("LINESTRING(");
+        int validPointCount = 0;
+        Double previousLatitude = null;
+        Double previousLongitude = null;
+
+        for (GeoPoint point : coordinates.values()) {
+            if (point == null || point.latitude() == null || point.longitude() == null) {
+                continue;
+            }
+
+            double latitude = point.latitude();
+            double longitude = point.longitude();
+            if (previousLatitude != null
+                    && previousLongitude != null
+                    && Double.compare(previousLatitude, latitude) == 0
+                    && Double.compare(previousLongitude, longitude) == 0) {
+                continue;
+            }
+
+            if (validPointCount > 0) {
+                lineStringBuilder.append(", ");
+            }
+            lineStringBuilder.append(longitude).append(" ").append(latitude);
+            validPointCount++;
+            previousLatitude = latitude;
+            previousLongitude = longitude;
+        }
+
+        if (validPointCount < 2) {
+            return null;
+        }
+        lineStringBuilder.append(")");
+        return lineStringBuilder.toString();
     }
 
     private String toCursor(PastRunningSessionHistoryRow row) {

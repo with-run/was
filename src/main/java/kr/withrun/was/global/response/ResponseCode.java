@@ -44,6 +44,7 @@ public enum ResponseCode {
     COURSE_NOT_FOUND("E304", HttpStatus.NOT_FOUND, "코스를 찾을 수 없습니다.", false),
     REVIEW_ALREADY_EXISTS("E305", HttpStatus.CONFLICT, "이미 리뷰를 작성한 코스입니다.", false),
     COURSE_DIFFICULTY_NOT_FOUND("E306", HttpStatus.NOT_FOUND, "코스 난이도가 설정되지 않았습니다.", false),
+    COURSE_ALREADY_EXISTS("E307", HttpStatus.CONFLICT, "이미 등록된 코스입니다.", false),
 
     // Running Error
     INVALID_RUNNING_MODE("E400", HttpStatus.BAD_REQUEST, "잘못된 러닝 모드입니다.", false),

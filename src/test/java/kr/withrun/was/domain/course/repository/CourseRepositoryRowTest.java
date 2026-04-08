@@ -317,6 +317,46 @@ class CourseRepositoryRowTest {
                 .containsExactlyInAnyOrder(shortCourse.getId(), longCourse.getId());
     }
 
+    @DisplayName("중복 코스 후보 조회는 공개 코스(OFFICIAL/COMMUNITY)만 대상으로 판정한다")
+    @Test
+    void detectsPublicDuplicateCourseOnlyForOfficialAndCommunity() {
+        LocalDateTime createdAt = LocalDateTime.of(2026, 4, 7, 10, 0);
+        persistCourse("Official Duplicate Candidate", 5000, CourseStatus.OFFICIAL, createdAt);
+        persistCourse("Community Duplicate Candidate", 5000, CourseStatus.COMMUNITY, createdAt);
+        persistCourse("Private Duplicate Candidate", 5000, CourseStatus.PRIVATE, createdAt);
+
+        boolean duplicateExists = courseRepository.existsPublicDuplicateCourse(
+                37.5665,
+                126.9780,
+                37.5700,
+                126.9820,
+                5000,
+                150,
+                0.12
+        );
+
+        assertThat(duplicateExists).isTrue();
+    }
+
+    @DisplayName("중복 코스 후보 조회는 private 코스만 존재하면 중복으로 판정하지 않는다")
+    @Test
+    void doesNotDetectDuplicateCourseWhenOnlyPrivateMatches() {
+        LocalDateTime createdAt = LocalDateTime.of(2026, 4, 7, 10, 30);
+        persistCourse("Private Duplicate Candidate", 5000, CourseStatus.PRIVATE, createdAt);
+
+        boolean duplicateExists = courseRepository.existsPublicDuplicateCourse(
+                37.5665,
+                126.9780,
+                37.5700,
+                126.9820,
+                5000,
+                150,
+                0.12
+        );
+
+        assertThat(duplicateExists).isFalse();
+    }
+
     private List<NearbyRecommendationCandidateRow> findNearbyRecommendationCandidates(
             List<PreferredDistanceRange> preferredDistanceMs
     ) {

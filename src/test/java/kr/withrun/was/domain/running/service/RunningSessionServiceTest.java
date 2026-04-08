@@ -79,6 +79,9 @@ import static kr.withrun.was.domain.running.type.RunningMode.GHOST;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyDouble;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.lenient;
@@ -166,6 +169,12 @@ class RunningSessionServiceTest {
                 navigationBundleGenerationService,
                 new CourseAccessPolicy()
         );
+        setField(runningSessionService, "duplicateCourseEndpointThresholdM", 150);
+        setField(runningSessionService, "duplicateCourseDistanceDiffRatio", 0.12d);
+        setField(runningSessionService, "duplicateCoursePhase2Enabled", false);
+        setField(runningSessionService, "duplicateCourseShapeToleranceM", 45d);
+        setField(runningSessionService, "duplicateCourseShapeMinOverlapRatio", 0.93d);
+        setField(runningSessionService, "duplicateCourseShapeSegmentizeStepM", 15d);
         lenient().when(userCalendarRepository.findByUserIdAndCalendarDateAndDeletedAtIsNull(any(), any()))
                 .thenReturn(Optional.empty());
         lenient().when(userCalendarRepository.findDailySummaries(any(), any(), any()))
@@ -1243,6 +1252,213 @@ class RunningSessionServiceTest {
         inOrder.verify(courseDifficultyRepository).save(any(CourseDifficulty.class));
         inOrder.verify(courseTypeMapRepository).saveAll(any());
         inOrder.verify(courseSignalService).upsertCourseFeature(savedCourse, Difficulty.MEDIUM, List.of(CourseType.RIVERSIDE, CourseType.URBAN));
+    }
+
+    @DisplayName("공개 코스와 유사한 자유 러닝 코스는 중복 등록을 거부한다")
+    @Test
+    void rejectsRegisterCourseWhenPublicDuplicateCourseExists() {
+        RunningSession runningSession = runningSession(89L, 7L, true, STARTED_AT);
+        setField(runningSession, "distanceM", 10000);
+        setField(runningSession, "startLatitude", 37.566501);
+        setField(runningSession, "startLongitude", 126.978001);
+        setField(runningSession, "endLatitude", 37.574501);
+        setField(runningSession, "endLongitude", 126.989001);
+
+        RegisterRunningSessionCourseRequest request = new RegisterRunningSessionCourseRequest(
+                "중복 검증 코스",
+                "COMMUNITY",
+                "MEDIUM",
+                List.of("RIVERSIDE", "URBAN"),
+                RouteType.LOOP,
+                null
+        );
+
+        stubUser(user(7L));
+        when(runningSessionRepository.findByIdAndDeletedAtIsNull(89L)).thenReturn(Optional.of(runningSession));
+        when(courseRepository.existsPublicDuplicateCourse(
+                37.566501,
+                126.978001,
+                37.574501,
+                126.989001,
+                10000,
+                150,
+                0.12
+        )).thenReturn(true);
+
+        assertThatThrownBy(() -> runningSessionService.registerRunningSessionCourse(89L, 7L, request))
+                .isInstanceOf(CustomException.class)
+                .extracting("responseCode")
+                .isEqualTo(ResponseCode.COURSE_ALREADY_EXISTS);
+
+        verify(runningGpsSampleRepository, never()).findByRunningSessionIdOrderBySampledAtAsc(89L);
+        verify(courseRepository, never()).save(any(Course.class));
+        verify(navigationBundleGenerationService, never()).generate(any(Long.class));
+        verify(courseDifficultyRepository, never()).save(any(CourseDifficulty.class));
+        verify(courseTypeMapRepository, never()).saveAll(any());
+        verify(courseSignalService, never()).upsertCourseFeature(any(Course.class), any(Difficulty.class), any());
+    }
+
+    @DisplayName("Phase2 활성화 시 route_geom shape 유사도 중복 검사를 우선 적용한다")
+    @Test
+    void rejectsRegisterCourseWhenPublicDuplicateCourseExistsByRouteGeometry() {
+        setField(runningSessionService, "duplicateCoursePhase2Enabled", true);
+        setField(runningSessionService, "duplicateCourseShapeToleranceM", 45d);
+        setField(runningSessionService, "duplicateCourseShapeMinOverlapRatio", 0.93d);
+        setField(runningSessionService, "duplicateCourseShapeSegmentizeStepM", 15d);
+        RunningSession runningSession = runningSession(90L, 7L, true, STARTED_AT);
+        setField(runningSession, "distanceM", 10000);
+        setField(runningSession, "startLatitude", 37.566501);
+        setField(runningSession, "startLongitude", 126.978001);
+        setField(runningSession, "endLatitude", 37.574501);
+        setField(runningSession, "endLongitude", 126.989001);
+        RunningGpsSample firstGpsSample = gpsSample(
+                runningSession,
+                7L,
+                LocalDateTime.of(2026, 4, 7, 7, 0, 0),
+                37.566501,
+                126.978001,
+                10.2,
+                3.1,
+                180.0,
+                null,
+                null,
+                null,
+                null
+        );
+        RunningGpsSample secondGpsSample = gpsSample(
+                runningSession,
+                7L,
+                LocalDateTime.of(2026, 4, 7, 7, 0, 10),
+                37.574501,
+                126.989001,
+                12.4,
+                3.2,
+                178.0,
+                null,
+                null,
+                null,
+                null
+        );
+
+        RegisterRunningSessionCourseRequest request = new RegisterRunningSessionCourseRequest(
+                "Phase2 중복 검증 코스",
+                "COMMUNITY",
+                "MEDIUM",
+                List.of("RIVERSIDE", "URBAN"),
+                RouteType.LOOP,
+                null
+        );
+
+        stubUser(user(7L));
+        when(runningSessionRepository.findByIdAndDeletedAtIsNull(90L)).thenReturn(Optional.of(runningSession));
+        when(runningGpsSampleRepository.findByRunningSessionIdOrderBySampledAtAsc(90L))
+                .thenReturn(List.of(firstGpsSample, secondGpsSample));
+        when(courseRepository.existsPublicDuplicateCourseByRouteGeometry(
+                eq(37.566501),
+                eq(126.978001),
+                eq(37.574501),
+                eq(126.989001),
+                eq(10000),
+                eq(150),
+                eq(0.12),
+                anyString(),
+                eq(45d),
+                eq(0.93d),
+                eq(15d)
+        )).thenReturn(true);
+
+        assertThatThrownBy(() -> runningSessionService.registerRunningSessionCourse(90L, 7L, request))
+                .isInstanceOf(CustomException.class)
+                .extracting("responseCode")
+                .isEqualTo(ResponseCode.COURSE_ALREADY_EXISTS);
+
+        ArgumentCaptor<String> routeLineStringCaptor = ArgumentCaptor.forClass(String.class);
+        verify(courseRepository).existsPublicDuplicateCourseByRouteGeometry(
+                eq(37.566501),
+                eq(126.978001),
+                eq(37.574501),
+                eq(126.989001),
+                eq(10000),
+                eq(150),
+                eq(0.12),
+                routeLineStringCaptor.capture(),
+                eq(45d),
+                eq(0.93d),
+                eq(15d)
+        );
+        assertThat(routeLineStringCaptor.getValue())
+                .startsWith("LINESTRING(")
+                .contains("126.978001 37.566501")
+                .contains("126.989001 37.574501");
+        verify(courseRepository, never()).existsPublicDuplicateCourse(anyDouble(), anyDouble(), anyDouble(), anyDouble(), anyInt(), anyInt(), anyDouble());
+        verify(courseRepository, never()).save(any(Course.class));
+        verify(navigationBundleGenerationService, never()).generate(any(Long.class));
+        verify(courseDifficultyRepository, never()).save(any(CourseDifficulty.class));
+        verify(courseTypeMapRepository, never()).saveAll(any());
+        verify(courseSignalService, never()).upsertCourseFeature(any(Course.class), any(Difficulty.class), any());
+    }
+
+    @DisplayName("Phase2 활성화 상태에서 경로 LineString 생성이 불가능하면 Phase1 중복 검사로 폴백한다")
+    @Test
+    void fallsBackToPhase1WhenRouteLineStringCannotBeBuilt() {
+        setField(runningSessionService, "duplicateCoursePhase2Enabled", true);
+        RunningSession runningSession = runningSession(91L, 7L, true, STARTED_AT);
+        setField(runningSession, "distanceM", 10000);
+        setField(runningSession, "startLatitude", 37.566501);
+        setField(runningSession, "startLongitude", 126.978001);
+        setField(runningSession, "endLatitude", 37.574501);
+        setField(runningSession, "endLongitude", 126.989001);
+
+        RegisterRunningSessionCourseRequest request = new RegisterRunningSessionCourseRequest(
+                "Phase2 폴백 코스",
+                "COMMUNITY",
+                "MEDIUM",
+                List.of("RIVERSIDE", "URBAN"),
+                RouteType.LOOP,
+                null
+        );
+
+        stubUser(user(7L));
+        when(runningSessionRepository.findByIdAndDeletedAtIsNull(91L)).thenReturn(Optional.of(runningSession));
+        when(runningGpsSampleRepository.findByRunningSessionIdOrderBySampledAtAsc(91L)).thenReturn(List.of());
+        when(courseRepository.existsPublicDuplicateCourse(
+                37.566501,
+                126.978001,
+                37.574501,
+                126.989001,
+                10000,
+                150,
+                0.12
+        )).thenReturn(true);
+
+        assertThatThrownBy(() -> runningSessionService.registerRunningSessionCourse(91L, 7L, request))
+                .isInstanceOf(CustomException.class)
+                .extracting("responseCode")
+                .isEqualTo(ResponseCode.COURSE_ALREADY_EXISTS);
+
+        verify(courseRepository, never()).existsPublicDuplicateCourseByRouteGeometry(
+                anyDouble(),
+                anyDouble(),
+                anyDouble(),
+                anyDouble(),
+                anyInt(),
+                anyInt(),
+                anyDouble(),
+                anyString(),
+                anyDouble(),
+                anyDouble(),
+                anyDouble()
+        );
+        verify(courseRepository).existsPublicDuplicateCourse(
+                37.566501,
+                126.978001,
+                37.574501,
+                126.989001,
+                10000,
+                150,
+                0.12
+        );
+        verify(courseRepository, never()).save(any(Course.class));
     }
 
     @DisplayName("완료된 러닝 세션을 PRIVATE 코스로 등록한다")

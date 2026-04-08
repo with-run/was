@@ -63,4 +63,28 @@ public interface CourseCustomRepository {
             double targetLongitude,
             int radiusM
     );
+
+    boolean existsPublicDuplicateCourse(
+            double startLatitude,
+            double startLongitude,
+            double endLatitude,
+            double endLongitude,
+            int distanceM,
+            int endpointThresholdM,
+            double distanceDiffRatio
+    );
+
+    boolean existsPublicDuplicateCourseByRouteGeometry(
+            double startLatitude,
+            double startLongitude,
+            double endLatitude,
+            double endLongitude,
+            int distanceM,
+            int endpointThresholdM,
+            double distanceDiffRatio,
+            String routeLineStringWkt,
+            double shapeToleranceM,
+            double shapeMinOverlapRatio,
+            double shapeSegmentizeStepM
+    );
 }

@@ -586,6 +586,26 @@ class RunningSessionControllerTest {
         then(runningSessionService).should().registerRunningSessionCourse(runningSessionId, currentUserId, request);
     }
 
+    @DisplayName("유사한 공개 코스가 있으면 코스 등록 요청은 충돌 응답을 반환한다")
+    @Test
+    void returnsConflictWhenRegisterCourseRequestedForDuplicatePublicCourse() throws Exception {
+        long currentUserId = 7L;
+        long runningSessionId = 901L;
+        RegisterRunningSessionCourseRequest request = validRegisterCourseRequest();
+        given(runningSessionService.registerRunningSessionCourse(runningSessionId, currentUserId, request))
+                .willThrow(new CustomException(ResponseCode.COURSE_ALREADY_EXISTS));
+
+        mockMvc.perform(post("/api/running-sessions/{runningSessionId}/register-course", runningSessionId)
+                        .header(HttpHeaders.AUTHORIZATION, bearerToken(currentUserId))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(validRegisterCourseRequestBody()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.code").value(ResponseCode.COURSE_ALREADY_EXISTS.getCode()));
+
+        then(runningSessionService).should().registerRunningSessionCourse(runningSessionId, currentUserId, request);
+    }
+
     @DisplayName("코스 등록 중 네비게이션 번들 생성이 실패하면 서비스 불가 응답을 반환한다")
     @Test
     void returnsServiceUnavailableWhenRegisterCourseNavigationBundleGenerationFails() throws Exception {
